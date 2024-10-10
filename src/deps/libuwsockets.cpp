@@ -26,6 +26,20 @@ extern "C"
     return (uws_app_t *)new uWS::App();
   }
 
+  void uws_app_clear_routes(int ssl, uws_app_t *app)
+  {
+    if (ssl)
+    {
+      uWS::SSLApp *uwsApp = (uWS::SSLApp *)app;
+      uwsApp->clearRoutes();
+    }
+    else
+    {
+      uWS::App *uwsApp = (uWS::App *)app;
+      uwsApp->clearRoutes();
+    }
+  }
+
   void uws_app_get(int ssl, uws_app_t *app, const char *pattern, uws_method_handler handler, void *user_data)
   {
     if (ssl)
@@ -1320,6 +1334,38 @@ extern "C"
       else
       {
         uwsRes->clearOnAborted();
+      }
+    }
+  }
+
+  void uws_res_on_timeout(int ssl, uws_res_r res,
+                          void (*handler)(uws_res_r res, void *opcional_data),
+                          void *opcional_data)
+  {
+    if (ssl)
+    {
+      uWS::HttpResponse<true> *uwsRes = (uWS::HttpResponse<true> *)res;
+      auto* onTimeout = reinterpret_cast<void (*)(uWS::HttpResponse<true>*, void*)>(handler);
+      if (handler)
+      {
+        uwsRes->onTimeout(opcional_data, onTimeout);
+      }
+      else
+      {
+        uwsRes->clearOnTimeout();
+      }
+    }
+    else
+    {
+      uWS::HttpResponse<false> *uwsRes = (uWS::HttpResponse<false> *)res;
+      auto* onTimeout = reinterpret_cast<void (*)(uWS::HttpResponse<false>*, void*)>(handler);
+      if (handler)
+      {
+        uwsRes->onTimeout(opcional_data, onTimeout);
+      }
+      else
+      {
+        uwsRes->clearOnTimeout();
       }
     }
   }
