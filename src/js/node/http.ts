@@ -70,6 +70,9 @@ const serverSymbol = Symbol.for("::bunternal::");
 const kPendingCallbacks = Symbol("pendingCallbacks");
 const kRequest = Symbol("request");
 const kCloseCallback = Symbol("closeCallback");
+const kIncomingMessage = Symbol("IncomingMessage");
+const kServerResponse = Symbol("ServerResponse");
+const kRejectNonStandardBodyWrites = Symbol("kRejectNonStandardBodyWrites");
 
 const kEmptyObject = Object.freeze(Object.create(null));
 
@@ -86,10 +89,12 @@ const {
   validateLinkHeaderValue,
   validateObject,
   validateInteger,
+  validateBoolean,
 } = require("internal/validators");
 const { isIP, isIPv6 } = require("node:net");
 const dns = require("node:dns");
 const ObjectKeys = Object.keys;
+const MathMin = Math.min;
 
 const {
   getHeader,
@@ -106,6 +111,7 @@ const {
   webRequestOrResponseHasBodyValue,
   getCompleteWebRequestOrResponseBodyValueAsArrayBuffer,
   drainMicrotasks,
+  setRequireHostHeader,
 } = $cpp("NodeHTTP.cpp", "createNodeHTTPInternalBinding") as {
   getHeader: (headers: Headers, name: string) => string | undefined;
   setHeader: (headers: Headers, name: string, value: string) => void;
@@ -119,6 +125,7 @@ const {
   Blob: (typeof globalThis)["Blob"];
   headersTuple: any;
   webRequestOrResponseHasBodyValue: (arg: any) => boolean;
+  setRequireHostHeader: (server: any, requireHostHeader: boolean) => void;
   getCompleteWebRequestOrResponseBodyValueAsArrayBuffer: (arg: any) => ArrayBuffer | undefined;
 };
 
@@ -189,7 +196,8 @@ const kEmptyBuffer = Buffer.alloc(0);
 function isValidTLSArray(obj) {
   if (typeof obj === "string" || isTypedArray(obj) || isArrayBuffer(obj) || $inheritsBlob(obj)) return true;
   if (Array.isArray(obj)) {
-    for (var i = 0; i < obj.length; i++) {
+    const length = obj.length;
+    for (var i = 0; i < length; i++) {
       const item = obj[i];
       if (typeof item !== "string" && !isTypedArray(item) && !isArrayBuffer(item) && !$inheritsBlob(item)) return false; // prettier-ignore
     }
@@ -230,6 +238,9 @@ var FakeSocket = class Socket extends Duplex {
   connect(port, host, connectListener) {
     return this;
   }
+  _onTimeout = function () {
+    this.emit("timeout");
+  };
 
   _destroy(err, callback) {
     const socketData = this[kInternalSocketData];
@@ -373,6 +384,20 @@ const NodeHTTPServerSocket = class Socket extends Duplex {
   #onCloseForDestroy(closeCallback) {
     this.#onClose();
     $isCallable(closeCallback) && closeCallback();
+  }
+
+  _onTimeout() {
+    const handle = this[kHandle];
+    const response = handle?.response;
+    // if there is a response, and it has pending data,
+    // we suppress the timeout because a write is in progress
+    if (response && response.bufferedAmount > 0) {
+      return;
+    }
+    this.emit("timeout");
+  }
+  _unrefTimer() {
+    // for compatibility
   }
 
   address() {
@@ -633,6 +658,77 @@ function emitListeningNextTick(self, hostname, port) {
   }
 }
 
+function storeHTTPOptions(options) {
+  this[kIncomingMessage] = options.IncomingMessage || IncomingMessage;
+  this[kServerResponse] = options.ServerResponse || ServerResponse;
+
+  const maxHeaderSize = options.maxHeaderSize;
+  if (maxHeaderSize !== undefined) validateInteger(maxHeaderSize, "maxHeaderSize", 0);
+  this.maxHeaderSize = maxHeaderSize;
+
+  const insecureHTTPParser = options.insecureHTTPParser;
+  if (insecureHTTPParser !== undefined) validateBoolean(insecureHTTPParser, "options.insecureHTTPParser");
+  this.insecureHTTPParser = insecureHTTPParser;
+
+  const requestTimeout = options.requestTimeout;
+  if (requestTimeout !== undefined) {
+    validateInteger(requestTimeout, "requestTimeout", 0);
+    this.requestTimeout = requestTimeout;
+  } else {
+    this.requestTimeout = 300_000; // 5 minutes
+  }
+
+  const headersTimeout = options.headersTimeout;
+  if (headersTimeout !== undefined) {
+    validateInteger(headersTimeout, "headersTimeout", 0);
+    this.headersTimeout = headersTimeout;
+  } else {
+    this.headersTimeout = MathMin(60_000, this.requestTimeout); // Minimum between 60 seconds or requestTimeout
+  }
+
+  if (this.requestTimeout > 0 && this.headersTimeout > 0 && this.headersTimeout > this.requestTimeout) {
+    throw $ERR_OUT_OF_RANGE("headersTimeout", "<= requestTimeout", headersTimeout);
+  }
+
+  const keepAliveTimeout = options.keepAliveTimeout;
+  if (keepAliveTimeout !== undefined) {
+    validateInteger(keepAliveTimeout, "keepAliveTimeout", 0);
+    this.keepAliveTimeout = keepAliveTimeout;
+  } else {
+    this.keepAliveTimeout = 5_000; // 5 seconds;
+  }
+
+  const connectionsCheckingInterval = options.connectionsCheckingInterval;
+  if (connectionsCheckingInterval !== undefined) {
+    validateInteger(connectionsCheckingInterval, "connectionsCheckingInterval", 0);
+    this.connectionsCheckingInterval = connectionsCheckingInterval;
+  } else {
+    this.connectionsCheckingInterval = 30_000; // 30 seconds
+  }
+
+  const requireHostHeader = options.requireHostHeader;
+  if (requireHostHeader !== undefined) {
+    validateBoolean(requireHostHeader, "options.requireHostHeader");
+    this.requireHostHeader = requireHostHeader;
+  } else {
+    this.requireHostHeader = true;
+  }
+
+  const joinDuplicateHeaders = options.joinDuplicateHeaders;
+  if (joinDuplicateHeaders !== undefined) {
+    validateBoolean(joinDuplicateHeaders, "options.joinDuplicateHeaders");
+  }
+  this.joinDuplicateHeaders = joinDuplicateHeaders;
+
+  const rejectNonStandardBodyWrites = options.rejectNonStandardBodyWrites;
+  if (rejectNonStandardBodyWrites !== undefined) {
+    validateBoolean(rejectNonStandardBodyWrites, "options.rejectNonStandardBodyWrites");
+    this.rejectNonStandardBodyWrites = rejectNonStandardBodyWrites;
+  } else {
+    this.rejectNonStandardBodyWrites = false;
+  }
+}
+
 type Server = InstanceType<typeof Server>;
 const Server = function Server(options, callback) {
   if (!(this instanceof Server)) return new Server(options, callback);
@@ -710,7 +806,7 @@ const Server = function Server(options, callback) {
   }
 
   this[optionsSymbol] = options;
-
+  storeHTTPOptions.$call(this, options);
   if (callback) this.on("request", callback);
   return this;
 } as unknown as typeof import("node:http").Server;
@@ -754,6 +850,8 @@ function onServerRequestEvent(this: NodeHTTPServerSocket, event: NodeHTTPRespons
 const ServerPrototype = {
   constructor: Server,
   __proto__: EventEmitter.prototype,
+  [kIncomingMessage]: undefined,
+  [kServerResponse]: undefined,
   ref() {
     this._unref = false;
     this[serverSymbol]?.ref?.();
@@ -958,6 +1056,7 @@ const ServerPrototype = {
           socketHandle,
           isSocketNew,
           socket,
+          isAncientHTTP: boolean,
         ) {
           const prevIsNextIncomingMessageHTTPS = isNextIncomingMessageHTTPS;
           isNextIncomingMessageHTTPS = isHTTPS;
@@ -966,8 +1065,12 @@ const ServerPrototype = {
           }
 
           const http_req = new RequestClass(kHandle, url, method, headersObject, headersArray, handle, hasBody, socket);
+          if (isAncientHTTP) {
+            http_req.httpVersion = "1.0";
+          }
           const http_res = new ResponseClass(http_req, {
             [kHandle]: handle,
+            [kRejectNonStandardBodyWrites]: server.rejectNonStandardBodyWrites,
           });
           isNextIncomingMessageHTTPS = prevIsNextIncomingMessageHTTPS;
           handle.onabort = onServerRequestEvent.bind(socket);
@@ -1061,6 +1164,9 @@ const ServerPrototype = {
             http_res.detachSocket(socket);
             return;
           }
+          if (http_res.socket) {
+            http_res.on("finish", http_res.detachSocket.bind(http_res, socket));
+          }
 
           const { reject, resolve, promise } = $newPromiseCapability(Promise);
           resolveFunction = resolve;
@@ -1124,6 +1230,7 @@ const ServerPrototype = {
       });
       getBunServerAllClosedPromise(this[serverSymbol]).$then(emitCloseNTServer.bind(this));
       isHTTPS = this[serverSymbol].protocol === "https";
+      setRequireHostHeader(this[serverSymbol], this.requireHostHeader);
 
       if (this?._unref) {
         this[serverSymbol]?.unref?.();
@@ -1380,6 +1487,7 @@ function onDataIncomingMessage(
 const IncomingMessagePrototype = {
   constructor: IncomingMessage,
   __proto__: Readable.prototype,
+  httpVersion: "1.1",
   _construct(callback) {
     // TODO: streaming
     const type = this[typeSymbol];
@@ -1550,20 +1658,22 @@ const IncomingMessagePrototype = {
   set statusMessage(value) {
     this[statusMessageSymbol] = value;
   },
-  get httpVersion() {
-    return "1.1";
-  },
-  set httpVersion(value) {
-    // noop
-  },
   get httpVersionMajor() {
-    return 1;
+    const version = this.httpVersion;
+    if (version.startsWith("1.")) {
+      return 1;
+    }
+    return 0;
   },
   set httpVersionMajor(value) {
     // noop
   },
   get httpVersionMinor() {
-    return 1;
+    const version = this.httpVersion;
+    if (version.endsWith(".1")) {
+      return 1;
+    }
+    return 0;
   },
   set httpVersionMinor(value) {
     // noop
@@ -1973,10 +2083,13 @@ function ServerResponse(req, options) {
   // https://github.com/nodejs/node/blob/cf8c6994e0f764af02da4fa70bc5962142181bf3/lib/_http_server.js#L192
   if (req.method === "HEAD") this._hasBody = false;
 
-  const handle = options?.[kHandle];
+  if (options) {
+    const handle = options[kHandle];
 
-  if (handle) {
-    this[kHandle] = handle;
+    if (handle) {
+      this[kHandle] = handle;
+    }
+    this[kRejectNonStandardBodyWrites] = options[kRejectNonStandardBodyWrites] ?? false;
   }
 }
 
@@ -2001,6 +2114,7 @@ const ServerResponsePrototype = {
   _removedConnection: false,
   _removedContLen: false,
   _hasBody: true,
+  [kRejectNonStandardBodyWrites]: undefined,
   get headersSent() {
     return (
       this[headerStateSymbol] === NodeHTTPHeaderState.sent || this[headerStateSymbol] === NodeHTTPHeaderState.assigned
@@ -2073,15 +2187,16 @@ const ServerResponsePrototype = {
     }
 
     if (chunk && !this._hasBody) {
-      if (this.req?.method === "HEAD") {
-        chunk = undefined;
-      } else {
+      if (this[kRejectNonStandardBodyWrites]) {
         throw $ERR_HTTP_BODY_NOT_ALLOWED();
+      } else {
+        // node.js just ignore the write in this case
+        chunk = undefined;
       }
     }
 
     if (!handle) {
-      if (typeof callback === "function") {
+      if ($isCallable(callback)) {
         process.nextTick(callback);
       }
       return this;
@@ -2174,7 +2289,12 @@ const ServerResponsePrototype = {
       return false;
     }
     if (chunk && !this._hasBody) {
-      throw $ERR_HTTP_BODY_NOT_ALLOWED();
+      if (this[kRejectNonStandardBodyWrites]) {
+        throw $ERR_HTTP_BODY_NOT_ALLOWED();
+      } else {
+        // node.js just ignore the write in this case
+        chunk = undefined;
+      }
     }
     let result = 0;
 
@@ -2366,9 +2486,12 @@ const ServerResponsePrototype = {
     this._implicitHeader();
 
     const handle = this[kHandle];
-    if (handle && !this.headersSent) {
-      this[headerStateSymbol] = NodeHTTPHeaderState.sent;
-      handle.writeHead(this.statusCode, this.statusMessage, this[headersSymbol]);
+    if (handle) {
+      if (this[headerStateSymbol] === NodeHTTPHeaderState.assigned) {
+        this[headerStateSymbol] = NodeHTTPHeaderState.sent;
+        handle.writeHead(this.statusCode, this.statusMessage, this[headersSymbol]);
+      }
+      handle.flushHeaders();
     }
   },
 } satisfies typeof import("node:http").ServerResponse.prototype;
@@ -2571,7 +2694,6 @@ const kOptions = Symbol("options");
 const kSocketPath = Symbol("socketPath");
 const kSignal = Symbol("signal");
 const kMaxHeaderSize = Symbol("maxHeaderSize");
-const kJoinDuplicateHeaders = Symbol("joinDuplicateHeaders");
 
 function ClientRequest(input, options, cb) {
   if (!(this instanceof ClientRequest)) {
@@ -2773,7 +2895,7 @@ function ClientRequest(input, options, cb) {
       }
 
       if (path.startsWith("http://") || path.startsWith("https://")) {
-        return [path`${protocol}//${host}${this[kUseDefaultPort] ? "" : ":" + this[kPort]}`];
+        return [path, `${protocol}//${host}${this[kUseDefaultPort] ? "" : ":" + this[kPort]}`];
       } else {
         let proxy: string | undefined;
         const url = `${protocol}//${host}${this[kUseDefaultPort] ? "" : ":" + this[kPort]}${path}`;
@@ -3125,7 +3247,7 @@ function ClientRequest(input, options, cb) {
     options.host =
       validateHost(options.hostname, "hostname") || validateHost(options.host, "host") || "localhost");
 
-  const setHost = options.setHost === undefined || Boolean(options.setHost);
+  const setHost = options.setHost === undefined || !!options.setHost;
 
   this[kSocketPath] = options.socketPath;
 
@@ -3157,27 +3279,25 @@ function ClientRequest(input, options, cb) {
   }
 
   const _maxHeaderSize = options.maxHeaderSize;
-  // TODO: Validators
-  // if (maxHeaderSize !== undefined)
-  //   validateInteger(maxHeaderSize, "maxHeaderSize", 0);
+  const maxHeaderSize = options.maxHeaderSize;
+  if (maxHeaderSize !== undefined) validateInteger(maxHeaderSize, "maxHeaderSize", 0);
+  this.maxHeaderSize = maxHeaderSize;
+
   this[kMaxHeaderSize] = _maxHeaderSize;
 
-  // const insecureHTTPParser = options.insecureHTTPParser;
-  // if (insecureHTTPParser !== undefined) {
-  //   validateBoolean(insecureHTTPParser, 'options.insecureHTTPParser');
-  // }
-
-  // this.insecureHTTPParser = insecureHTTPParser;
-  var _joinDuplicateHeaders = options.joinDuplicateHeaders;
-  if (_joinDuplicateHeaders !== undefined) {
-    // TODO: Validators
-    // validateBoolean(
-    //   options.joinDuplicateHeaders,
-    //   "options.joinDuplicateHeaders",
-    // );
+  const insecureHTTPParser = options.insecureHTTPParser;
+  if (insecureHTTPParser !== undefined) {
+    validateBoolean(insecureHTTPParser, "options.insecureHTTPParser");
   }
 
-  this[kJoinDuplicateHeaders] = _joinDuplicateHeaders;
+  this.insecureHTTPParser = insecureHTTPParser;
+  const joinDuplicateHeaders = options.joinDuplicateHeaders;
+
+  if (joinDuplicateHeaders !== undefined) {
+    validateBoolean(joinDuplicateHeaders, "options.joinDuplicateHeaders");
+  }
+  this.joinDuplicateHeaders = joinDuplicateHeaders;
+
   if (options.pfx) {
     throw new Error("pfx is not supported");
   }
@@ -3266,7 +3386,15 @@ function ClientRequest(input, options, cb) {
 
   const { headers } = options;
   const headersArray = $isJSArray(headers);
-  if (!headersArray) {
+  if (headersArray) {
+    const length = headers.length;
+    if (length % 2 !== 0) {
+      throw $ERR_INVALID_ARG_VALUE("options.headers", headers);
+    }
+    for (let i = 0; i < length; ) {
+      this.appendHeader(headers[i++], headers[i++]);
+    }
+  } else {
     if (headers) {
       for (let key in headers) {
         this.setHeader(key, headers[key]);
@@ -3613,27 +3741,29 @@ function _writeHead(statusCode, reason, obj, response) {
     let k;
 
     if ($isArray(obj)) {
+      const length = obj.length;
       // Append all the headers provided in the array:
-      if (obj.length && $isArray(obj[0])) {
-        for (let i = 0; i < obj.length; i++) {
+      if (length && $isArray(obj[0])) {
+        for (let i = 0; i < length; i++) {
           const k = obj[i];
           if (k) response.appendHeader(k[0], k[1]);
         }
       } else {
-        if (obj.length % 2 !== 0) {
+        if (length % 2 !== 0) {
           throw new Error("raw headers must have an even number of elements");
         }
 
-        for (let n = 0; n < obj.length; n += 2) {
-          k = obj[n + 0];
-          if (k) response.setHeader(k, obj[n + 1]);
+        for (let n = 0; n < length; n += 2) {
+          k = obj[n];
+          if (k) response.appendHeader(k, obj[n + 1]);
         }
       }
     } else if (obj) {
       const keys = Object.keys(obj);
+      const length = keys.length;
       // Retain for(;;) loop for performance reasons
       // Refs: https://github.com/nodejs/node/pull/30958
-      for (let i = 0; i < keys.length; i++) {
+      for (let i = 0; i < length; i++) {
         k = keys[i];
         if (k) response.setHeader(k, obj[k]);
       }

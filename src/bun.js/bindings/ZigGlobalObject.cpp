@@ -168,6 +168,10 @@
 #include "JSDiffieHellmanGroup.h"
 #include "JSECDH.h"
 #include "JSCipher.h"
+#include "JSKeyObject.h"
+#include "JSSecretKeyObject.h"
+#include "JSPublicKeyObject.h"
+#include "JSPrivateKeyObject.h"
 #include "JSS3File.h"
 #include "S3Error.h"
 #include "ProcessBindingBuffer.h"
@@ -907,9 +911,6 @@ extern "C" JSC__JSGlobalObject* Zig__GlobalObject__create(void* console_client, 
         // - `--smol` is passed
         // - The machine has less than 4GB of RAM
         bool shouldDisableStopIfNecessaryTimer = !miniMode;
-        if (WTF::ramSize() < 1024ull * 1024ull * 1024ull * 4ull) {
-            shouldDisableStopIfNecessaryTimer = false;
-        }
 
         if (disable_stop_if_necessary_timer) {
             const char value = disable_stop_if_necessary_timer[0];
@@ -988,31 +989,34 @@ extern "C" JSC__JSGlobalObject* Zig__GlobalObject__create(void* console_client, 
         const auto initializeWorker = [&](WebCore::Worker& worker) -> void {
             auto& options = worker.options();
 
-            if (options.bun.env) {
-                auto map = WTFMove(options.bun.env);
-                auto size = map->size();
+            if (options.env.has_value()) {
+                HashMap<String, String> map = WTFMove(*std::exchange(options.env, std::nullopt));
+                auto size = map.size();
 
                 // In theory, a GC could happen before we finish putting all the properties on the object.
                 // So we use a MarkedArgumentBuffer to ensure that the strings are not collected and we immediately put them on the object.
                 MarkedArgumentBuffer strings;
-                strings.ensureCapacity(map->size());
-                for (const auto& value : map->values()) {
+                strings.ensureCapacity(size);
+                for (const auto& value : map.values()) {
                     strings.append(jsString(vm, value));
                 }
 
                 auto env = JSC::constructEmptyObject(globalObject, globalObject->objectPrototype(), size >= JSFinalObject::maxInlineCapacity ? JSFinalObject::maxInlineCapacity : size);
                 size_t i = 0;
-                for (auto k : *map) {
+                for (auto k : map) {
                     // They can have environment variables with numbers as keys.
                     // So we must use putDirectMayBeIndex to handle that.
                     env->putDirectMayBeIndex(globalObject, JSC::Identifier::fromString(vm, WTFMove(k.key)), strings.at(i++));
                 }
-                map->clear();
                 globalObject->m_processEnvObject.set(vm, globalObject, env);
             }
 
-            // ensure remote termination works.
+            // Ensure that the TerminationException singleton is constructed. Workers need this so
+            // that we can request their termination from another thread. For the main thread, we
+            // can delay this until we are actually requesting termination (until and unless we ever
+            // do need to request termination from another thread).
             vm.ensureTerminationException();
+            // Make the VM stop sooner once terminated (e.g. microtasks won't run)
             vm.forbidExecutionOnTermination();
         };
 
@@ -2916,6 +2920,26 @@ void GlobalObject::finishCreation(VM& vm)
             setupCipherClassStructure(init);
         });
 
+    m_JSKeyObjectClassStructure.initLater(
+        [](LazyClassStructure::Initializer& init) {
+            setupKeyObjectClassStructure(init);
+        });
+
+    m_JSSecretKeyObjectClassStructure.initLater(
+        [](LazyClassStructure::Initializer& init) {
+            setupSecretKeyObjectClassStructure(init);
+        });
+
+    m_JSPublicKeyObjectClassStructure.initLater(
+        [](LazyClassStructure::Initializer& init) {
+            setupPublicKeyObjectClassStructure(init);
+        });
+
+    m_JSPrivateKeyObjectClassStructure.initLater(
+        [](LazyClassStructure::Initializer& init) {
+            setupPrivateKeyObjectClassStructure(init);
+        });
+
     m_lazyStackCustomGetterSetter.initLater(
         [](const Initializer<CustomGetterSetter>& init) {
             init.set(CustomGetterSetter::create(init.vm, errorInstanceLazyStackCustomGetter, errorInstanceLazyStackCustomSetter));
@@ -3630,19 +3654,6 @@ JSC_DEFINE_CUSTOM_GETTER(getConsoleStderr, (JSGlobalObject * globalObject, Encod
     return JSValue::encode(stderrValue);
 }
 
-JSC_DEFINE_CUSTOM_SETTER(EventSource_setter,
-    (JSC::JSGlobalObject * globalObject, JSC::EncodedJSValue thisValue,
-        JSC::EncodedJSValue value, JSC::PropertyName property))
-{
-    if (JSValue::decode(thisValue) != globalObject) {
-        return false;
-    }
-
-    auto& vm = JSC::getVM(globalObject);
-    globalObject->putDirect(vm, property, JSValue::decode(value), 0);
-    return true;
-}
-
 JSC_DEFINE_HOST_FUNCTION(jsFunctionToClass, (JSC::JSGlobalObject * globalObject, JSC::CallFrame* callFrame))
 {
     // Mimick the behavior of class Foo {} for a regular JSFunction.
@@ -3957,21 +3968,6 @@ extern "C" EncodedJSValue JSC__JSGlobalObject__getHTTP2CommonString(Zig::GlobalO
     return JSValue::encode(JSValue::JSUndefined);
 }
 
-#define IMPL_GET_COMMON_STRING(name)                                                                         \
-    extern "C" EncodedJSValue JSC__JSGlobalObject__commonStrings__get##name(Zig::GlobalObject* globalObject) \
-    {                                                                                                        \
-        JSC::JSString* value = globalObject->commonStrings().name##String(globalObject);                     \
-        ASSERT(value != nullptr);                                                                            \
-        return JSValue::encode(value);                                                                       \
-    }
-
-IMPL_GET_COMMON_STRING(IPv4)
-IMPL_GET_COMMON_STRING(IPv6)
-IMPL_GET_COMMON_STRING(IN4Loopback)
-IMPL_GET_COMMON_STRING(IN6Any)
-
-#undef IMPL_GET_COMMON_STRING
-
 template<typename Visitor>
 void GlobalObject::visitChildrenImpl(JSCell* cell, Visitor& visitor)
 {
@@ -4115,6 +4111,10 @@ void GlobalObject::visitChildrenImpl(JSCell* cell, Visitor& visitor)
     thisObject->m_JSHmacClassStructure.visit(visitor);
     thisObject->m_JSHashClassStructure.visit(visitor);
     thisObject->m_JSCipherClassStructure.visit(visitor);
+    thisObject->m_JSKeyObjectClassStructure.visit(visitor);
+    thisObject->m_JSSecretKeyObjectClassStructure.visit(visitor);
+    thisObject->m_JSPublicKeyObjectClassStructure.visit(visitor);
+    thisObject->m_JSPrivateKeyObjectClassStructure.visit(visitor);
     thisObject->m_statValues.visit(visitor);
     thisObject->m_bigintStatValues.visit(visitor);
     thisObject->m_statFsValues.visit(visitor);
@@ -4142,14 +4142,23 @@ extern "C" bool JSGlobalObject__setTimeZone(JSC::JSGlobalObject* globalObject, c
     return false;
 }
 
-extern "C" void JSGlobalObject__throwTerminationException(JSC::JSGlobalObject* globalObject)
+extern "C" void JSGlobalObject__requestTermination(JSC::JSGlobalObject* globalObject)
 {
-    globalObject->vm().setHasTerminationRequest();
+    auto& vm = JSC::getVM(globalObject);
+    vm.ensureTerminationException();
+    vm.setHasTerminationRequest();
 }
 
 extern "C" void JSGlobalObject__clearTerminationException(JSC::JSGlobalObject* globalObject)
 {
-    globalObject->vm().clearHasTerminationRequest();
+    auto& vm = JSC::getVM(globalObject);
+    // Clear the request for the termination exception to be thrown
+    vm.clearHasTerminationRequest();
+    // In case it actually has been thrown, clear the exception itself as well
+    auto scope = DECLARE_CATCH_SCOPE(vm);
+    if (scope.exception() && vm.isTerminationException(scope.exception())) {
+        scope.clearException();
+    }
 }
 
 extern "C" void Bun__queueTask(JSC__JSGlobalObject*, WebCore::EventLoopTask* task);
@@ -4675,6 +4684,21 @@ bool GlobalObject::hasNapiFinalizers() const
     }
 
     return false;
+}
+
+extern "C" void Zig__GlobalObject__destructOnExit(Zig::GlobalObject* globalObject)
+{
+    auto& vm = JSC::getVM(globalObject);
+    if (vm.entryScope) {
+        // Exiting while running JavaScript code (e.g. `process.exit()`), so we can't destroy it
+        // just now. Perhaps later in this case we can defer destruction to run later.
+        return;
+    }
+    gcUnprotect(globalObject);
+    globalObject = nullptr;
+    vm.heap.collectNow(JSC::Sync, JSC::CollectionScope::Full);
+    vm.derefSuppressingSaferCPPChecking();
+    vm.derefSuppressingSaferCPPChecking();
 }
 
 #include "ZigGeneratedClasses+lazyStructureImpl.h"

@@ -61,15 +61,35 @@ pub fn get(this: *JSValkeyClient, globalObject: *JSC.JSGlobalObject, callframe: 
 }
 
 pub fn set(this: *JSValkeyClient, globalObject: *JSC.JSGlobalObject, callframe: *JSC.CallFrame) bun.JSError!JSValue {
+    const args_view = callframe.arguments();
+    var stack_fallback = std.heap.stackFallback(512, bun.default_allocator);
+    var args = try std.ArrayList(JSArgument).initCapacity(stack_fallback.get(), args_view.len);
+    defer {
+        for (args.items) |*item| {
+            item.deinit();
+        }
+        args.deinit();
+    }
     const key = (try fromJS(globalObject, callframe.argument(0))) orelse {
         return globalObject.throwInvalidArgumentType("set", "key", "string or buffer");
     };
-    defer key.deinit();
+    args.appendAssumeCapacity(key);
 
     const value = (try fromJS(globalObject, callframe.argument(1))) orelse {
-        return globalObject.throwInvalidArgumentType("set", "value", "string or buffer");
+        return globalObject.throwInvalidArgumentType("set", "value", "string or buffer or number");
     };
-    defer value.deinit();
+    args.appendAssumeCapacity(value);
+
+    if (args_view.len > 2) {
+        for (args_view[2..]) |arg| {
+            if (arg.isUndefinedOrNull()) {
+                break;
+            }
+            args.appendAssumeCapacity(try fromJS(globalObject, arg) orelse {
+                return globalObject.throwInvalidArgumentType("set", "arguments", "string or buffer");
+            });
+        }
+    }
 
     // Send SET command
     const promise = this.send(
@@ -77,11 +97,12 @@ pub fn set(this: *JSValkeyClient, globalObject: *JSC.JSGlobalObject, callframe: 
         callframe.this(),
         &.{
             .command = "SET",
-            .args = .{ .args = &.{ key, value } },
+            .args = .{ .args = args.items },
         },
     ) catch |err| {
         return protocol.valkeyErrorToJS(globalObject, "Failed to send SET command", err);
     };
+
     return promise.asValue(globalObject);
 }
 
@@ -152,7 +173,11 @@ pub fn expire(this: *JSValkeyClient, globalObject: *JSC.JSGlobalObject, callfram
     };
     defer key.deinit();
 
-    const seconds = try globalObject.validateIntegerRange(callframe.argument(1), i32, 0, .{ .min = 0, .max = 2147483647 });
+    const seconds = try globalObject.validateIntegerRange(callframe.argument(1), i32, 0, .{
+        .min = 0,
+        .max = 2147483647,
+        .field_name = "seconds",
+    });
 
     // Convert seconds to a string
     var int_buf: [64]u8 = undefined;
@@ -751,7 +776,7 @@ const compile = struct {
 };
 
 const JSValkeyClient = @import("./js_valkey.zig").JSValkeyClient;
-const bun = @import("root").bun;
+const bun = @import("bun");
 const JSC = bun.JSC;
 const valkey = bun.valkey;
 const protocol = valkey.protocol;

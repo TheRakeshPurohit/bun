@@ -1,6 +1,6 @@
 const std = @import("std");
 const logger = bun.logger;
-const bun = @import("root").bun;
+const bun = @import("bun");
 const string = bun.string;
 const Output = bun.Output;
 const Global = bun.Global;
@@ -139,6 +139,7 @@ pub const Loader = struct {
             session_token = token;
         }
         this.aws_credentials = .{
+            .ref_count = .init(),
             .accessKeyId = accessKeyId,
             .secretAccessKey = secretAccessKey,
             .region = region,

@@ -1,4 +1,4 @@
-const bun = @import("root").bun;
+const bun = @import("bun");
 const JSC = bun.JSC;
 const String = bun.String;
 const uws = bun.uws;
@@ -50,35 +50,35 @@ pub const AnyPostgresError = error{
 
 pub fn postgresErrorToJS(globalObject: *JSC.JSGlobalObject, message: ?[]const u8, err: AnyPostgresError) JSValue {
     const error_code: JSC.Error = switch (err) {
-        error.ConnectionClosed => JSC.Error.ERR_POSTGRES_CONNECTION_CLOSED,
-        error.ExpectedRequest => JSC.Error.ERR_POSTGRES_EXPECTED_REQUEST,
-        error.ExpectedStatement => JSC.Error.ERR_POSTGRES_EXPECTED_STATEMENT,
-        error.InvalidBackendKeyData => JSC.Error.ERR_POSTGRES_INVALID_BACKEND_KEY_DATA,
-        error.InvalidBinaryData => JSC.Error.ERR_POSTGRES_INVALID_BINARY_DATA,
-        error.InvalidByteSequence => JSC.Error.ERR_POSTGRES_INVALID_BYTE_SEQUENCE,
-        error.InvalidByteSequenceForEncoding => JSC.Error.ERR_POSTGRES_INVALID_BYTE_SEQUENCE_FOR_ENCODING,
-        error.InvalidCharacter => JSC.Error.ERR_POSTGRES_INVALID_CHARACTER,
-        error.InvalidMessage => JSC.Error.ERR_POSTGRES_INVALID_MESSAGE,
-        error.InvalidMessageLength => JSC.Error.ERR_POSTGRES_INVALID_MESSAGE_LENGTH,
-        error.InvalidQueryBinding => JSC.Error.ERR_POSTGRES_INVALID_QUERY_BINDING,
-        error.InvalidServerKey => JSC.Error.ERR_POSTGRES_INVALID_SERVER_KEY,
-        error.InvalidServerSignature => JSC.Error.ERR_POSTGRES_INVALID_SERVER_SIGNATURE,
-        error.MultidimensionalArrayNotSupportedYet => JSC.Error.ERR_POSTGRES_MULTIDIMENSIONAL_ARRAY_NOT_SUPPORTED_YET,
-        error.NullsInArrayNotSupportedYet => JSC.Error.ERR_POSTGRES_NULLS_IN_ARRAY_NOT_SUPPORTED_YET,
-        error.Overflow => JSC.Error.ERR_POSTGRES_OVERFLOW,
-        error.PBKDFD2 => JSC.Error.ERR_POSTGRES_AUTHENTICATION_FAILED_PBKDF2,
-        error.SASL_SIGNATURE_MISMATCH => JSC.Error.ERR_POSTGRES_SASL_SIGNATURE_MISMATCH,
-        error.SASL_SIGNATURE_INVALID_BASE64 => JSC.Error.ERR_POSTGRES_SASL_SIGNATURE_INVALID_BASE64,
-        error.TLSNotAvailable => JSC.Error.ERR_POSTGRES_TLS_NOT_AVAILABLE,
-        error.TLSUpgradeFailed => JSC.Error.ERR_POSTGRES_TLS_UPGRADE_FAILED,
-        error.UnexpectedMessage => JSC.Error.ERR_POSTGRES_UNEXPECTED_MESSAGE,
-        error.UNKNOWN_AUTHENTICATION_METHOD => JSC.Error.ERR_POSTGRES_UNKNOWN_AUTHENTICATION_METHOD,
-        error.UNSUPPORTED_AUTHENTICATION_METHOD => JSC.Error.ERR_POSTGRES_UNSUPPORTED_AUTHENTICATION_METHOD,
-        error.UnsupportedByteaFormat => JSC.Error.ERR_POSTGRES_UNSUPPORTED_BYTEA_FORMAT,
-        error.UnsupportedArrayFormat => JSC.Error.ERR_POSTGRES_UNSUPPORTED_ARRAY_FORMAT,
-        error.UnsupportedIntegerSize => JSC.Error.ERR_POSTGRES_UNSUPPORTED_INTEGER_SIZE,
-        error.UnsupportedNumericFormat => JSC.Error.ERR_POSTGRES_UNSUPPORTED_NUMERIC_FORMAT,
-        error.UnknownFormatCode => JSC.Error.ERR_POSTGRES_UNKNOWN_FORMAT_CODE,
+        error.ConnectionClosed => .POSTGRES_CONNECTION_CLOSED,
+        error.ExpectedRequest => .POSTGRES_EXPECTED_REQUEST,
+        error.ExpectedStatement => .POSTGRES_EXPECTED_STATEMENT,
+        error.InvalidBackendKeyData => .POSTGRES_INVALID_BACKEND_KEY_DATA,
+        error.InvalidBinaryData => .POSTGRES_INVALID_BINARY_DATA,
+        error.InvalidByteSequence => .POSTGRES_INVALID_BYTE_SEQUENCE,
+        error.InvalidByteSequenceForEncoding => .POSTGRES_INVALID_BYTE_SEQUENCE_FOR_ENCODING,
+        error.InvalidCharacter => .POSTGRES_INVALID_CHARACTER,
+        error.InvalidMessage => .POSTGRES_INVALID_MESSAGE,
+        error.InvalidMessageLength => .POSTGRES_INVALID_MESSAGE_LENGTH,
+        error.InvalidQueryBinding => .POSTGRES_INVALID_QUERY_BINDING,
+        error.InvalidServerKey => .POSTGRES_INVALID_SERVER_KEY,
+        error.InvalidServerSignature => .POSTGRES_INVALID_SERVER_SIGNATURE,
+        error.MultidimensionalArrayNotSupportedYet => .POSTGRES_MULTIDIMENSIONAL_ARRAY_NOT_SUPPORTED_YET,
+        error.NullsInArrayNotSupportedYet => .POSTGRES_NULLS_IN_ARRAY_NOT_SUPPORTED_YET,
+        error.Overflow => .POSTGRES_OVERFLOW,
+        error.PBKDFD2 => .POSTGRES_AUTHENTICATION_FAILED_PBKDF2,
+        error.SASL_SIGNATURE_MISMATCH => .POSTGRES_SASL_SIGNATURE_MISMATCH,
+        error.SASL_SIGNATURE_INVALID_BASE64 => .POSTGRES_SASL_SIGNATURE_INVALID_BASE64,
+        error.TLSNotAvailable => .POSTGRES_TLS_NOT_AVAILABLE,
+        error.TLSUpgradeFailed => .POSTGRES_TLS_UPGRADE_FAILED,
+        error.UnexpectedMessage => .POSTGRES_UNEXPECTED_MESSAGE,
+        error.UNKNOWN_AUTHENTICATION_METHOD => .POSTGRES_UNKNOWN_AUTHENTICATION_METHOD,
+        error.UNSUPPORTED_AUTHENTICATION_METHOD => .POSTGRES_UNSUPPORTED_AUTHENTICATION_METHOD,
+        error.UnsupportedByteaFormat => .POSTGRES_UNSUPPORTED_BYTEA_FORMAT,
+        error.UnsupportedArrayFormat => .POSTGRES_UNSUPPORTED_ARRAY_FORMAT,
+        error.UnsupportedIntegerSize => .POSTGRES_UNSUPPORTED_INTEGER_SIZE,
+        error.UnsupportedNumericFormat => .POSTGRES_UNSUPPORTED_NUMERIC_FORMAT,
+        error.UnknownFormatCode => .POSTGRES_UNKNOWN_FORMAT_CODE,
         error.JSError => {
             return globalObject.takeException(error.JSError);
         },
@@ -253,7 +253,7 @@ pub const PostgresSQLContext = struct {
         @export(&js_init, .{ .name = "PostgresSQLContext__init" });
     }
 };
-pub const PostgresSQLQueryResultMode = enum(u8) {
+pub const PostgresSQLQueryResultMode = enum(u2) {
     objects = 0,
     values = 1,
     raw = 2,
@@ -272,23 +272,28 @@ pub const PostgresSQLQuery = struct {
 
     ref_count: std.atomic.Value(u32) = std.atomic.Value(u32).init(1),
 
-    flags: packed struct {
+    flags: packed struct(u8) {
         is_done: bool = false,
         binary: bool = false,
         bigint: bool = false,
         simple: bool = false,
         result_mode: PostgresSQLQueryResultMode = .objects,
+        _padding: u2 = 0,
     } = .{},
 
-    pub usingnamespace JSC.Codegen.JSPostgresSQLQuery;
+    pub const js = JSC.Codegen.JSPostgresSQLQuery;
+    pub const toJS = js.toJS;
+    pub const fromJS = js.fromJS;
+    pub const fromJSDirect = js.fromJSDirect;
+
     pub fn getTarget(this: *PostgresSQLQuery, globalObject: *JSC.JSGlobalObject, clean_target: bool) JSC.JSValue {
         const thisValue = this.thisValue.get();
         if (thisValue == .zero) {
             return .zero;
         }
-        const target = PostgresSQLQuery.targetGetCached(thisValue) orelse return .zero;
+        const target = js.targetGetCached(thisValue) orelse return .zero;
         if (clean_target) {
-            PostgresSQLQuery.targetSetCached(thisValue, globalObject, .zero);
+            js.targetSetCached(thisValue, globalObject, .zero);
         }
         return target;
     }
@@ -499,14 +504,14 @@ pub const PostgresSQLQuery = struct {
         }
 
         defer thisValue.ensureStillAlive();
-        PostgresSQLQuery.bindingSetCached(thisValue, globalObject, .zero);
-        PostgresSQLQuery.pendingValueSetCached(thisValue, globalObject, .zero);
-        PostgresSQLQuery.targetSetCached(thisValue, globalObject, .zero);
+        js.bindingSetCached(thisValue, globalObject, .zero);
+        js.pendingValueSetCached(thisValue, globalObject, .zero);
+        js.targetSetCached(thisValue, globalObject, .zero);
     }
 
     fn consumePendingValue(thisValue: JSC.JSValue, globalObject: *JSC.JSGlobalObject) ?JSValue {
-        const pending_value = PostgresSQLQuery.pendingValueGetCached(thisValue) orelse return null;
-        PostgresSQLQuery.pendingValueSetCached(thisValue, globalObject, .zero);
+        const pending_value = js.pendingValueGetCached(thisValue) orelse return null;
+        js.pendingValueSetCached(thisValue, globalObject, .zero);
         return pending_value;
     }
 
@@ -539,7 +544,7 @@ pub const PostgresSQLQuery = struct {
             consumePendingValue(thisValue, globalObject) orelse .undefined,
             tag.toJSTag(globalObject),
             tag.toJSNumber(),
-            if (connection == .zero) .undefined else PostgresSQLConnection.queriesGetCached(connection) orelse .undefined,
+            if (connection == .zero) .undefined else PostgresSQLConnection.js.queriesGetCached(connection) orelse .undefined,
             JSValue.jsBoolean(is_last),
         });
     }
@@ -606,10 +611,10 @@ pub const PostgresSQLQuery = struct {
             },
         };
 
-        PostgresSQLQuery.bindingSetCached(this_value, globalThis, values);
-        PostgresSQLQuery.pendingValueSetCached(this_value, globalThis, pending_value);
+        js.bindingSetCached(this_value, globalThis, values);
+        js.pendingValueSetCached(this_value, globalThis, pending_value);
         if (columns != .undefined) {
-            PostgresSQLQuery.columnsSetCached(this_value, globalThis, columns);
+            js.columnsSetCached(this_value, globalThis, columns);
         }
 
         return this_value;
@@ -627,7 +632,7 @@ pub const PostgresSQLQuery = struct {
     }
     pub fn setPendingValue(this: *PostgresSQLQuery, globalObject: *JSC.JSGlobalObject, callframe: *JSC.CallFrame) bun.JSError!JSValue {
         const result = callframe.argument(0);
-        PostgresSQLQuery.pendingValueSetCached(this.thisValue.get(), globalObject, result);
+        js.pendingValueSetCached(this.thisValue.get(), globalObject, result);
         return .undefined;
     }
     pub fn setMode(this: *PostgresSQLQuery, globalObject: *JSC.JSGlobalObject, callframe: *JSC.CallFrame) bun.JSError!JSValue {
@@ -658,7 +663,7 @@ pub const PostgresSQLQuery = struct {
         }
 
         const this_value = callframe.this();
-        const binding_value = PostgresSQLQuery.bindingGetCached(this_value) orelse .zero;
+        const binding_value = js.bindingGetCached(this_value) orelse .zero;
         var query_str = this.query.toUTF8(bun.default_allocator);
         defer query_str.deinit();
         var writer = connection.writer();
@@ -693,7 +698,7 @@ pub const PostgresSQLQuery = struct {
             this.ref();
             this.thisValue.upgrade(globalObject);
 
-            PostgresSQLQuery.targetSetCached(this_value, globalObject, query);
+            js.targetSetCached(this_value, globalObject, query);
             if (this.status == .running) {
                 connection.flushDataAndResetTimeout();
             } else {
@@ -702,7 +707,7 @@ pub const PostgresSQLQuery = struct {
             return .undefined;
         }
 
-        const columns_value = PostgresSQLQuery.columnsGetCached(this_value) orelse .undefined;
+        const columns_value = js.columnsGetCached(this_value) orelse .undefined;
 
         var signature = Signature.generate(globalObject, query_str.slice(), binding_value, columns_value, connection.prepared_statement_id, connection.flags.use_unnamed_prepared_statements) catch |err| {
             if (!globalObject.hasException())
@@ -810,7 +815,7 @@ pub const PostgresSQLQuery = struct {
         this.ref();
         this.thisValue.upgrade(globalObject);
 
-        PostgresSQLQuery.targetSetCached(this_value, globalObject, query);
+        js.targetSetCached(this_value, globalObject, query);
         if (did_write) {
             connection.flushDataAndResetTimeout();
         } else {
@@ -1356,7 +1361,10 @@ pub const PostgresSQLConnection = struct {
         failed,
     };
 
-    pub usingnamespace JSC.Codegen.JSPostgresSQLConnection;
+    pub const js = JSC.Codegen.JSPostgresSQLConnection;
+    pub const toJS = js.toJS;
+    pub const fromJS = js.fromJS;
+    pub const fromJSDirect = js.fromJSDirect;
 
     fn getTimeoutInterval(this: *const PostgresSQLConnection) u32 {
         return switch (this.status) {
@@ -1387,18 +1395,18 @@ pub const PostgresSQLConnection = struct {
     }
 
     pub fn getQueries(_: *PostgresSQLConnection, thisValue: JSC.JSValue, globalObject: *JSC.JSGlobalObject) JSC.JSValue {
-        if (PostgresSQLConnection.queriesGetCached(thisValue)) |value| {
+        if (js.queriesGetCached(thisValue)) |value| {
             return value;
         }
 
         const array = JSC.JSValue.createEmptyArray(globalObject, 0);
-        PostgresSQLConnection.queriesSetCached(thisValue, globalObject, array);
+        js.queriesSetCached(thisValue, globalObject, array);
 
         return array;
     }
 
     pub fn getOnConnect(_: *PostgresSQLConnection, thisValue: JSC.JSValue, _: *JSC.JSGlobalObject) JSC.JSValue {
-        if (PostgresSQLConnection.onconnectGetCached(thisValue)) |value| {
+        if (js.onconnectGetCached(thisValue)) |value| {
             return value;
         }
 
@@ -1406,12 +1414,12 @@ pub const PostgresSQLConnection = struct {
     }
 
     pub fn setOnConnect(_: *PostgresSQLConnection, thisValue: JSC.JSValue, globalObject: *JSC.JSGlobalObject, value: JSC.JSValue) bool {
-        PostgresSQLConnection.onconnectSetCached(thisValue, globalObject, value);
+        js.onconnectSetCached(thisValue, globalObject, value);
         return true;
     }
 
     pub fn getOnClose(_: *PostgresSQLConnection, thisValue: JSC.JSValue, _: *JSC.JSGlobalObject) JSC.JSValue {
-        if (PostgresSQLConnection.oncloseGetCached(thisValue)) |value| {
+        if (js.oncloseGetCached(thisValue)) |value| {
             return value;
         }
 
@@ -1419,7 +1427,7 @@ pub const PostgresSQLConnection = struct {
     }
 
     pub fn setOnClose(_: *PostgresSQLConnection, thisValue: JSC.JSValue, globalObject: *JSC.JSGlobalObject, value: JSC.JSValue) bool {
-        PostgresSQLConnection.oncloseSetCached(thisValue, globalObject, value);
+        js.oncloseSetCached(thisValue, globalObject, value);
         return true;
     }
 
@@ -1462,13 +1470,13 @@ pub const PostgresSQLConnection = struct {
 
         switch (this.status) {
             .connected => {
-                this.failFmt(.ERR_POSTGRES_IDLE_TIMEOUT, "Idle timeout reached after {}", .{bun.fmt.fmtDurationOneDecimal(@as(u64, this.idle_timeout_interval_ms) *| std.time.ns_per_ms)});
+                this.failFmt(.POSTGRES_IDLE_TIMEOUT, "Idle timeout reached after {}", .{bun.fmt.fmtDurationOneDecimal(@as(u64, this.idle_timeout_interval_ms) *| std.time.ns_per_ms)});
             },
             else => {
-                this.failFmt(.ERR_POSTGRES_CONNECTION_TIMEOUT, "Connection timeout after {}", .{bun.fmt.fmtDurationOneDecimal(@as(u64, this.connection_timeout_ms) *| std.time.ns_per_ms)});
+                this.failFmt(.POSTGRES_CONNECTION_TIMEOUT, "Connection timeout after {}", .{bun.fmt.fmtDurationOneDecimal(@as(u64, this.connection_timeout_ms) *| std.time.ns_per_ms)});
             },
             .sent_startup_message => {
-                this.failFmt(.ERR_POSTGRES_CONNECTION_TIMEOUT, "Connection timed out after {} (sent startup message, but never received response)", .{bun.fmt.fmtDurationOneDecimal(@as(u64, this.connection_timeout_ms) *| std.time.ns_per_ms)});
+                this.failFmt(.POSTGRES_CONNECTION_TIMEOUT, "Connection timed out after {} (sent startup message, but never received response)", .{bun.fmt.fmtDurationOneDecimal(@as(u64, this.connection_timeout_ms) *| std.time.ns_per_ms)});
             },
         }
         return .disarm;
@@ -1478,7 +1486,7 @@ pub const PostgresSQLConnection = struct {
         debug("onMaxLifetimeTimeout", .{});
         this.max_lifetime_timer.state = .FIRED;
         if (this.status == .failed) return .disarm;
-        this.failFmt(.ERR_POSTGRES_LIFETIME_TIMEOUT, "Max lifetime timeout reached after {}", .{bun.fmt.fmtDurationOneDecimal(@as(u64, this.max_lifetime_interval_ms) *| std.time.ns_per_ms)});
+        this.failFmt(.POSTGRES_LIFETIME_TIMEOUT, "Max lifetime timeout reached after {}", .{bun.fmt.fmtDurationOneDecimal(@as(u64, this.max_lifetime_interval_ms) *| std.time.ns_per_ms)});
         return .disarm;
     }
 
@@ -1936,8 +1944,8 @@ pub const PostgresSQLConnection = struct {
         js_value.ensureStillAlive();
         ptr.js_value = js_value;
 
-        PostgresSQLConnection.onconnectSetCached(js_value, globalObject, on_connect);
-        PostgresSQLConnection.oncloseSetCached(js_value, globalObject, on_close);
+        js.onconnectSetCached(js_value, globalObject, on_connect);
+        js.oncloseSetCached(js_value, globalObject, on_close);
         bun.analytics.Features.postgres_connections += 1;
 
         {
@@ -2267,8 +2275,8 @@ pub const PostgresSQLConnection = struct {
                             .prepared => {
                                 const thisValue = req.thisValue.get();
                                 bun.assert(thisValue != .zero);
-                                const binding_value = PostgresSQLQuery.bindingGetCached(thisValue) orelse .zero;
-                                const columns_value = PostgresSQLQuery.columnsGetCached(thisValue) orelse .zero;
+                                const binding_value = PostgresSQLQuery.js.bindingGetCached(thisValue) orelse .zero;
+                                const columns_value = PostgresSQLQuery.js.columnsGetCached(thisValue) orelse .zero;
                                 req.flags.binary = stmt.fields.len > 0;
 
                                 PostgresRequest.bindAndExecute(this.globalObject, stmt, binding_value, columns_value, PostgresSQLConnection.Writer, this.writer()) catch |err| {
@@ -2292,7 +2300,7 @@ pub const PostgresSQLConnection = struct {
                                     const thisValue = req.thisValue.get();
                                     bun.assert(thisValue != .zero);
                                     // prepareAndQueryWithSignature will write + bind + execute, it will change to running after binding is complete
-                                    const binding_value = PostgresSQLQuery.bindingGetCached(thisValue) orelse .zero;
+                                    const binding_value = PostgresSQLQuery.js.bindingGetCached(thisValue) orelse .zero;
                                     PostgresRequest.prepareAndQueryWithSignature(this.globalObject, query_str.slice(), binding_value, PostgresSQLConnection.Writer, this.writer(), &stmt.signature) catch |err| {
                                         stmt.status = .failed;
                                         stmt.error_response = .{ .postgres_error = err };
@@ -2357,7 +2365,7 @@ pub const PostgresSQLConnection = struct {
     }
 
     pub fn getQueriesArray(this: *const PostgresSQLConnection) JSValue {
-        return PostgresSQLConnection.queriesGetCached(this.js_value) orelse .zero;
+        return js.queriesGetCached(this.js_value) orelse .zero;
     }
 
     pub const DataCell = @import("./DataCell.zig").DataCell;
@@ -2371,7 +2379,7 @@ pub const PostgresSQLConnection = struct {
                 var statement = request.statement orelse return error.ExpectedStatement;
                 var structure: JSValue = .undefined;
                 var cached_structure: ?PostgresCachedStructure = null;
-                // explict use switch without else so if new modes are added, we don't forget to check for duplicate fields
+                // explicit use switch without else so if new modes are added, we don't forget to check for duplicate fields
                 switch (request.flags.result_mode) {
                     .objects => {
                         cached_structure = statement.structure(this.js_value, this.globalObject);
@@ -2404,7 +2412,7 @@ pub const PostgresSQLConnection = struct {
                     cells = try bun.default_allocator.alloc(DataCell, statement.fields.len);
                     free_cells = true;
                 }
-                // make sure all cells are reseted if reader short breaks the fields will just be null with is better than undefined behavior
+                // make sure all cells are reset if reader short breaks the fields will just be null with is better than undefined behavior
                 @memset(cells, DataCell{ .tag = .null, .value = .{ .null = 0 } });
                 putter.list = cells;
 
@@ -2425,12 +2433,12 @@ pub const PostgresSQLConnection = struct {
                 }
                 const thisValue = request.thisValue.get();
                 bun.assert(thisValue != .zero);
-                const pending_value = PostgresSQLQuery.pendingValueGetCached(thisValue) orelse .zero;
+                const pending_value = PostgresSQLQuery.js.pendingValueGetCached(thisValue) orelse .zero;
                 pending_value.ensureStillAlive();
                 const result = putter.toJS(this.globalObject, pending_value, structure, statement.fields_flags, request.flags.result_mode, cached_structure);
 
                 if (pending_value == .zero) {
-                    PostgresSQLQuery.pendingValueSetCached(thisValue, this.globalObject, result);
+                    PostgresSQLQuery.js.pendingValueSetCached(thisValue, this.globalObject, result);
                 }
             },
             .CopyData => {
@@ -2818,18 +2826,18 @@ pub const PostgresSQLConnection = struct {
 
     pub fn consumeOnConnectCallback(this: *const PostgresSQLConnection, globalObject: *JSC.JSGlobalObject) ?JSC.JSValue {
         debug("consumeOnConnectCallback", .{});
-        const on_connect = PostgresSQLConnection.onconnectGetCached(this.js_value) orelse return null;
+        const on_connect = js.onconnectGetCached(this.js_value) orelse return null;
         debug("consumeOnConnectCallback exists", .{});
 
-        PostgresSQLConnection.onconnectSetCached(this.js_value, globalObject, .zero);
+        js.onconnectSetCached(this.js_value, globalObject, .zero);
         return on_connect;
     }
 
     pub fn consumeOnCloseCallback(this: *const PostgresSQLConnection, globalObject: *JSC.JSGlobalObject) ?JSC.JSValue {
         debug("consumeOnCloseCallback", .{});
-        const on_close = PostgresSQLConnection.oncloseGetCached(this.js_value) orelse return null;
+        const on_close = js.oncloseGetCached(this.js_value) orelse return null;
         debug("consumeOnCloseCallback exists", .{});
-        PostgresSQLConnection.oncloseSetCached(this.js_value, globalObject, .zero);
+        js.oncloseSetCached(this.js_value, globalObject, .zero);
         return on_close;
     }
 };
@@ -3261,7 +3269,7 @@ const Signature = struct {
 
 pub fn createBinding(globalObject: *JSC.JSGlobalObject) JSValue {
     const binding = JSValue.createEmptyObjectWithNullPrototype(globalObject);
-    binding.put(globalObject, ZigString.static("PostgresSQLConnection"), PostgresSQLConnection.getConstructor(globalObject));
+    binding.put(globalObject, ZigString.static("PostgresSQLConnection"), PostgresSQLConnection.js.getConstructor(globalObject));
     binding.put(globalObject, ZigString.static("init"), JSC.JSFunction.create(globalObject, "init", PostgresSQLContext.init, 0, .{}));
     binding.put(
         globalObject,

@@ -615,7 +615,7 @@ pub const ShellCpTask = struct {
     }
 };
 
-const Opts = packed struct {
+const Opts = packed struct(u16) {
     /// -f
     ///
     /// If the destination file cannot be opened, remove it and create a
@@ -681,6 +681,8 @@ const Opts = packed struct {
     /// Do not overwrite an existing file.  (The -n option overrides any previous -f or -i options.)
     overwrite_existing_file: bool = true,
 
+    _padding: u7 = 0,
+
     const Parse = FlagParser(*@This());
 
     pub fn parse(opts: *Opts, args: []const [*:0]const u8) Result(?[]const [*:0]const u8, ParseError) {
@@ -739,7 +741,7 @@ const Opts = packed struct {
 const log = bun.Output.scoped(.cp, true);
 const ArrayList = std.ArrayList;
 const Syscall = bun.sys;
-const bun = @import("root").bun;
+const bun = @import("bun");
 const shell = bun.shell;
 const interpreter = @import("../interpreter.zig");
 const Interpreter = interpreter.Interpreter;

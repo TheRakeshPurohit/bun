@@ -18,11 +18,17 @@ pub const JSValkeyClient = struct {
             .nsec = 0,
         },
     },
+    ref_count: RefCount,
 
-    ref_count: u32 = 1,
+    pub const js = JSC.Codegen.JSRedisClient;
+    pub const toJS = js.toJS;
+    pub const fromJS = js.fromJS;
+    pub const fromJSDirect = js.fromJSDirect;
 
-    pub usingnamespace JSC.Codegen.JSRedisClient;
-    pub usingnamespace bun.NewRefCounted(JSValkeyClient, deinit, null);
+    const RefCount = bun.ptr.RefCount(@This(), "ref_count", deinit, .{});
+    pub const ref = RefCount.ref;
+    pub const deref = RefCount.deref;
+    pub const new = bun.TrivialNew(@This());
 
     // Factory function to create a new Valkey client from JS
     pub fn constructor(globalObject: *JSC.JSGlobalObject, callframe: *JSC.CallFrame) bun.JSError!*JSValkeyClient {
@@ -102,7 +108,8 @@ pub const JSValkeyClient = struct {
         bun.analytics.Features.valkey += 1;
 
         return JSValkeyClient.new(.{
-            .client = valkey.ValkeyClient{
+            .ref_count = .init(),
+            .client = .{
                 .vm = vm,
                 .address = switch (uri) {
                     .standalone_unix, .standalone_tls_unix => .{ .unix = hostname },
@@ -138,7 +145,6 @@ pub const JSValkeyClient = struct {
                 .idle_timeout_interval_ms = options.idle_timeout_ms,
             },
             .globalObject = globalObject,
-            .ref_count = 1,
         });
     }
 
@@ -153,24 +159,22 @@ pub const JSValkeyClient = struct {
         return JSValue.jsNumber(len);
     }
 
-    pub fn jsConnect(this: *JSValkeyClient, globalObject: *JSC.JSGlobalObject, callframe: *JSC.CallFrame) bun.JSError!JSValue {
+    pub fn doConnect(this: *JSValkeyClient, globalObject: *JSC.JSGlobalObject, this_value: JSValue) bun.JSError!JSValue {
         this.ref();
         defer this.deref();
 
-        const this_value = callframe.this();
-
         // If already connected, resolve immediately
         if (this.client.status == .connected) {
-            return JSC.JSPromise.resolvedPromiseValue(globalObject, JSValkeyClient.helloGetCached(this_value) orelse .undefined);
+            return JSC.JSPromise.resolvedPromiseValue(globalObject, js.helloGetCached(this_value) orelse .undefined);
         }
 
-        if (JSValkeyClient.connectionPromiseGetCached(this_value)) |promise| {
+        if (js.connectionPromiseGetCached(this_value)) |promise| {
             return promise;
         }
 
         const promise_ptr = JSC.JSPromise.create(globalObject);
         const promise = promise_ptr.asValue(globalObject);
-        JSValkeyClient.connectionPromiseSetCached(this_value, globalObject, promise);
+        js.connectionPromiseSetCached(this_value, globalObject, promise);
 
         // If was manually closed, reset that flag
         this.client.flags.is_manually_closed = false;
@@ -182,7 +186,7 @@ pub const JSValkeyClient = struct {
             this.connect() catch |err| {
                 this.poll_ref.unref(this.client.vm);
                 this.client.flags.needs_to_open_socket = true;
-                const err_value = globalObject.ERR_SOCKET_CLOSED_BEFORE_CONNECTION(" {s} connecting to Valkey", .{@errorName(err)}).toJS();
+                const err_value = globalObject.ERR(.SOCKET_CLOSED_BEFORE_CONNECTION, " {s} connecting to Valkey", .{@errorName(err)}).toJS();
                 promise_ptr.reject(globalObject, err_value);
                 return promise;
             };
@@ -209,6 +213,10 @@ pub const JSValkeyClient = struct {
         return promise;
     }
 
+    pub fn jsConnect(this: *JSValkeyClient, globalObject: *JSC.JSGlobalObject, callframe: *JSC.CallFrame) bun.JSError!JSValue {
+        return try this.doConnect(globalObject, callframe.this());
+    }
+
     pub fn jsDisconnect(this: *JSValkeyClient, _: *JSC.JSGlobalObject, _: *JSC.CallFrame) bun.JSError!JSValue {
         if (this.client.status == .disconnected) {
             return .undefined;
@@ -218,26 +226,26 @@ pub const JSValkeyClient = struct {
     }
 
     pub fn getOnConnect(_: *JSValkeyClient, thisValue: JSValue, _: *JSC.JSGlobalObject) JSValue {
-        if (JSValkeyClient.onconnectGetCached(thisValue)) |value| {
+        if (js.onconnectGetCached(thisValue)) |value| {
             return value;
         }
         return .undefined;
     }
 
     pub fn setOnConnect(_: *JSValkeyClient, thisValue: JSValue, globalObject: *JSC.JSGlobalObject, value: JSValue) bool {
-        JSValkeyClient.onconnectSetCached(thisValue, globalObject, value);
+        js.onconnectSetCached(thisValue, globalObject, value);
         return true;
     }
 
     pub fn getOnClose(_: *JSValkeyClient, thisValue: JSValue, _: *JSC.JSGlobalObject) JSValue {
-        if (JSValkeyClient.oncloseGetCached(thisValue)) |value| {
+        if (js.oncloseGetCached(thisValue)) |value| {
             return value;
         }
         return .undefined;
     }
 
     pub fn setOnClose(_: *JSValkeyClient, thisValue: JSValue, globalObject: *JSC.JSGlobalObject, value: JSValue) bool {
-        JSValkeyClient.oncloseSetCached(thisValue, globalObject, value);
+        js.oncloseSetCached(thisValue, globalObject, value);
         return true;
     }
 
@@ -377,7 +385,7 @@ pub const JSValkeyClient = struct {
         this.poll_ref.ref(vm);
 
         this.connect() catch |err| {
-            this.failWithJSValue(this.globalObject.ERR_SOCKET_CLOSED_BEFORE_CONNECTION("{s} reconnecting", .{@errorName(err)}).toJS());
+            this.failWithJSValue(this.globalObject.ERR(.SOCKET_CLOSED_BEFORE_CONNECTION, "{s} reconnecting", .{@errorName(err)}).toJS());
             this.poll_ref.disable();
             return;
         };
@@ -401,16 +409,16 @@ pub const JSValkeyClient = struct {
 
         if (this.this_value.tryGet()) |this_value| {
             const hello_value = value.toJS(globalObject) catch .undefined;
-            JSValkeyClient.helloSetCached(this_value, globalObject, hello_value);
+            js.helloSetCached(this_value, globalObject, hello_value);
             // Call onConnect callback if defined by the user
-            if (JSValkeyClient.onconnectGetCached(this_value)) |on_connect| {
+            if (js.onconnectGetCached(this_value)) |on_connect| {
                 const js_value = this_value;
                 js_value.ensureStillAlive();
                 globalObject.queueMicrotask(on_connect, &[_]JSValue{ js_value, hello_value });
             }
 
-            if (JSValkeyClient.connectionPromiseGetCached(this_value)) |promise| {
-                JSValkeyClient.connectionPromiseSetCached(this_value, globalObject, .zero);
+            if (js.connectionPromiseGetCached(this_value)) |promise| {
+                js.connectionPromiseSetCached(this_value, globalObject, .zero);
                 promise.asPromise().?.resolve(globalObject, hello_value);
             }
         }
@@ -451,14 +459,14 @@ pub const JSValkeyClient = struct {
         defer loop.exit();
 
         if (this_jsvalue != .undefined) {
-            if (JSValkeyClient.connectionPromiseGetCached(this_jsvalue)) |promise| {
-                JSValkeyClient.connectionPromiseSetCached(this_jsvalue, globalObject, .zero);
+            if (js.connectionPromiseGetCached(this_jsvalue)) |promise| {
+                js.connectionPromiseSetCached(this_jsvalue, globalObject, .zero);
                 promise.asPromise().?.reject(globalObject, error_value);
             }
         }
 
         // Call onClose callback if it exists
-        if (JSValkeyClient.oncloseGetCached(this_jsvalue)) |on_close| {
+        if (js.oncloseGetCached(this_jsvalue)) |on_close| {
             _ = on_close.call(
                 globalObject,
                 this_jsvalue,
@@ -479,7 +487,7 @@ pub const JSValkeyClient = struct {
     pub fn failWithJSValue(this: *JSValkeyClient, value: JSValue) void {
         const this_value = this.this_value.tryGet() orelse return;
         const globalObject = this.globalObject;
-        if (JSValkeyClient.oncloseGetCached(this_value)) |on_close| {
+        if (js.oncloseGetCached(this_value)) |on_close| {
             const loop = this.client.vm.eventLoop();
             loop.enter();
             defer loop.exit();
@@ -574,7 +582,7 @@ pub const JSValkeyClient = struct {
 
             this.connect() catch |err| {
                 this.client.flags.needs_to_open_socket = true;
-                const err_value = globalThis.ERR_SOCKET_CLOSED_BEFORE_CONNECTION(" {s} connecting to Valkey", .{@errorName(err)}).toJS();
+                const err_value = globalThis.ERR(.SOCKET_CLOSED_BEFORE_CONNECTION, " {s} connecting to Valkey", .{@errorName(err)}).toJS();
                 const promise = JSC.JSPromise.create(globalThis);
                 promise.reject(globalThis, err_value);
                 return promise;
@@ -604,15 +612,15 @@ pub const JSValkeyClient = struct {
         return memory_cost;
     }
 
-    pub fn deinit(this: *JSValkeyClient) void {
+    fn deinit(this: *JSValkeyClient) void {
         bun.debugAssert(this.client.socket.isClosed());
 
         this.client.deinit(null);
         this.poll_ref.disable();
         this.stopTimers();
         this.this_value.deinit();
-        bun.debugAssert(this.ref_count == 0);
-        this.destroy();
+        this.ref_count.assertNoRefs();
+        bun.destroy(this);
     }
 
     /// Keep the event loop alive, or don't keep it alive
@@ -805,22 +813,20 @@ const Options = struct {
             .enable_auto_pipelining = !bun.getRuntimeFeatureFlag("BUN_FEATURE_FLAG_DISABLE_REDIS_AUTO_PIPELINING"),
         };
 
-        if (try options_obj.getIfPropertyExists(globalObject, "idleTimeout")) |idle_timeout| {
-            if (!idle_timeout.isEmptyOrUndefinedOrNull())
-                this.idle_timeout_ms = try globalObject.validateIntegerRange(idle_timeout, u32, 0, .{ .min = 0, .max = std.math.maxInt(u32) });
+        if (try options_obj.getOptionalInt(globalObject, "idleTimeout", u32)) |idle_timeout| {
+            this.idle_timeout_ms = idle_timeout;
         }
 
-        if (try options_obj.getIfPropertyExists(globalObject, "connectionTimeout")) |connection_timeout| {
-            if (!connection_timeout.isEmptyOrUndefinedOrNull())
-                this.connection_timeout_ms = try globalObject.validateIntegerRange(connection_timeout, u32, 0, .{ .min = 0, .max = std.math.maxInt(u32) });
+        if (try options_obj.getOptionalInt(globalObject, "connectionTimeout", u32)) |connection_timeout| {
+            this.connection_timeout_ms = connection_timeout;
         }
 
         if (try options_obj.getIfPropertyExists(globalObject, "autoReconnect")) |auto_reconnect| {
             this.enable_auto_reconnect = auto_reconnect.toBoolean();
         }
 
-        if (try options_obj.getIfPropertyExists(globalObject, "maxRetries")) |max_retries| {
-            this.max_retries = try globalObject.validateIntegerRange(max_retries, u32, 0, .{ .min = 0, .max = std.math.maxInt(u32) });
+        if (try options_obj.getOptionalInt(globalObject, "maxRetries", u32)) |max_retries| {
+            this.max_retries = max_retries;
         }
 
         if (try options_obj.getIfPropertyExists(globalObject, "enableOfflineQueue")) |enable_offline_queue| {
@@ -850,7 +856,7 @@ const Options = struct {
 };
 
 const std = @import("std");
-const bun = @import("root").bun;
+const bun = @import("bun");
 const valkey = @import("valkey.zig");
 const protocol = @import("valkey_protocol.zig");
 const JSC = bun.JSC;
