@@ -2907,7 +2907,7 @@ pub fn setCloseOnExec(fd: bun.FileDescriptor) Maybe(void) {
 
 pub fn setsockopt(fd: bun.FileDescriptor, level: c_int, optname: u32, value: i32) Maybe(i32) {
     while (true) {
-        const rc = syscall.setsockopt(fd.cast(), level, optname, &value, @sizeOf(i32));
+        const rc = syscall.setsockopt(fd.cast(), level, optname, std.mem.asBytes(&value), @sizeOf(i32));
         if (Maybe(i32).errnoSysFd(rc, .setsockopt, fd)) |err| {
             if (err.getErrno() == .INTR) continue;
             log("setsockopt() = {d} {s}", .{ err.err.errno, err.err.name() });
@@ -3625,8 +3625,13 @@ pub fn dupWithFlags(fd: bun.FileDescriptor, _: i32) Maybe(bun.FileDescriptor) {
     const ArgType = if (comptime Environment.isLinux) usize else c_int;
     const out = switch (fcntl(fd, @as(i32, bun.c.F_DUPFD_CLOEXEC), @as(ArgType, 0))) {
         .result => |result| result,
-        .err => |err| return .{ .err = err },
+        .err => |err| {
+            log("dup({}) = {}", .{ fd, err });
+            return .{ .err = err };
+        },
     };
+
+    log("dup({}) = {}", .{ fd, bun.FileDescriptor.fromNative(@intCast(out)) });
 
     return .initResult(.fromNative(@intCast(out)));
 }
